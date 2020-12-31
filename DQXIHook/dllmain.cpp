@@ -17,6 +17,36 @@ bool FileExists(LPCWSTR path)
 
 char* exe_base = nullptr;
 
+const size_t AddrStaticConstructObject_Internal = 0xF4E960;
+const size_t AddrGEngine = 0x5DA17D8;
+const size_t AddrUGameViewportClient__SetupInitialLocalPlayer = 0x1B02430;
+const size_t OffsetUEngine_ConsoleClass = 0x108; // offset to ConsoleClass field inside UEngine class
+const size_t OffsetUGameViewportClient_ViewportConsole = 0x48; // offset to ViewportConsole field inside UGameViewportClient class
+
+typedef void* (*TStaticConstructObject_Internal)(void* InClass, void* InOuter, void* InName, void* InFlags, void* InternalSetFlags, void* InTemplate, bool bCopyTransientsFromClassDefaults, void* InInstanceGraph, bool bAssumeTemplateIsArchetype);
+typedef void* (*TUGameViewportClient__SetupInitialLocalPlayer)(void* thisptr, void* OutError);
+TUGameViewportClient__SetupInitialLocalPlayer RealUGameViewportClient__SetupInitialLocalPlayer;
+
+// UGameViewportClient::SetupInitialLocalPlayer hook: in UE4 builds with ALLOW_CONSOLE=1, this function inits the UGameViewportClient::ViewportConsole field
+// so we just recreate the code that does that, and luckily that's all we need to re-enable the console!
+void* __fastcall HookUGameViewportClient__SetupInitialLocalPlayer(char* thisptr, void* OutError)
+{
+	// create UConsole class
+	TStaticConstructObject_Internal StaticConstructObject_Internal = (TStaticConstructObject_Internal)(exe_base + AddrStaticConstructObject_Internal);
+
+	char* engine = *(char**)(exe_base + AddrGEngine);
+	void* consoleClass = *(void**)(engine + OffsetUEngine_ConsoleClass);
+
+	void* console = StaticConstructObject_Internal(consoleClass, thisptr, 0, 0, 0, 0, 0, 0, 0);
+
+	// set ViewportConsole field in this UGameViewportClient instance
+	*(void**)(thisptr + OffsetUGameViewportClient_ViewportConsole) = console;
+
+	// call rest of SetupInitialLocalPlayer
+	auto ret = RealUGameViewportClient__SetupInitialLocalPlayer(thisptr, OutError);
+	return ret;
+}
+
 const size_t AddrFPakPlatformFile__FindFileInPakFiles = 0x1FC7A30; // address of FPakPlatformFile::FindFileInPakFiles func (hooked)
 const size_t AddrFPakPlatformFile__IsNonPakFilenameAllowed = 0x1FCA930; // address of FPakPlatformFile::IsNonPakFilenameAllowed func (hooked)
 const size_t AddrWindowTitle = 0x3FC1BC8;
@@ -52,6 +82,9 @@ __int64 __fastcall HookFPakPlatformFile__IsNonPakFilenameAllowed(void* thisptr, 
 
 void HookPakFile()
 {
+	char* UGameViewportClient__SetupInitialLocalPlayer = exe_base + AddrUGameViewportClient__SetupInitialLocalPlayer;
+	MH_CreateHook((void*)UGameViewportClient__SetupInitialLocalPlayer, HookUGameViewportClient__SetupInitialLocalPlayer, (LPVOID*)&RealUGameViewportClient__SetupInitialLocalPlayer);
+
 	char* FPakPlatformFile__FindFileInPakFiles = exe_base + AddrFPakPlatformFile__FindFileInPakFiles;
 	MH_CreateHook((void*)FPakPlatformFile__FindFileInPakFiles, HookFPakPlatformFile__FindFileInPakFiles, (LPVOID*)&RealFPakPlatformFile__FindFileInPakFiles);
 
